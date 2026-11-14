@@ -114,7 +114,11 @@ func (c *client) StreamFile(ctx context.Context, bagID, path string) (FileStream
 		pieces = append(pieces, p)
 	}
 
-	fetch := tonstorage.NewPreFetcher(ctx, torrent, downloader, func(event tonstorage.Event) {}, 64, pieces)
+	// The caller cancels ctx when the handler returns, before fasthttp reads the body.
+	// Piece download must outlive that cancel and stop when the reader is closed.
+	dlCtx, stopDownload := pieceDownloadContext(ctx)
+
+	fetch := tonstorage.NewPreFetcher(dlCtx, torrent, downloader, func(event tonstorage.Event) {}, 64, pieces)
 	pr, pw := io.Pipe()
 
 	// metrics wrapping reader
@@ -129,21 +133,22 @@ func (c *client) StreamFile(ctx context.Context, bagID, path string) (FileStream
 		metrics:       c.metrics,
 		firstByteOnce: &firstByteOnce,
 		ttfbObserved:  false,
+		onClose:       stopDownload,
 	}
 
-	go func(ctx context.Context) {
+	go func() {
 		defer fetch.Stop()
 		defer pw.Close()
 
 		for p := fileInfo.FromPiece; p <= fileInfo.ToPiece; p++ {
 			select {
-			case <-ctx.Done():
-				_ = pw.CloseWithError(ctx.Err())
+			case <-dlCtx.Done():
+				_ = pw.CloseWithError(dlCtx.Err())
 				return
 			default:
 			}
 
-			data, _, err := fetch.Get(ctx, p)
+			data, _, err := fetch.Get(dlCtx, p)
 			if err != nil {
 				_ = pw.CloseWithError(fmt.Errorf("failed to download piece %d: %w", p, err))
 				return
@@ -163,7 +168,7 @@ func (c *client) StreamFile(ctx context.Context, bagID, path string) (FileStream
 				return
 			}
 		}
-	}(ctx)
+	}()
 
 	if c.metrics != nil {
 		c.metrics.streamFileReqs.WithLabelValues("success").Inc()
@@ -175,6 +180,12 @@ func (c *client) StreamFile(ctx context.Context, bagID, path string) (FileStream
 		Size:       fileInfo.Size,
 		PeersCount: len(peers),
 	}, nil
+}
+
+// pieceDownloadContext detaches piece fetching from the caller's cancel and
+// bounds it by the same deadline the HTTP handler uses for the response body.
+func pieceDownloadContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(parent), time.Duration(constants.FileDownloadTimeoutSeconds)*time.Second)
 }
 
 // ListFiles returns all files in the bag with sizes by loading the torrent header via ADNL.

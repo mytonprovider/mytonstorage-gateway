@@ -2,6 +2,8 @@ package remotetonstorage
 
 import (
 	"context"
+	"io"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -135,5 +137,51 @@ func TestGetTorrentCanceledWaiterDoesNotAbortFlight(t *testing.T) {
 	}
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("loadTorrent calls = %d, want 1", got)
+	}
+}
+
+func TestPieceDownloadContextSurvivesParentCancel(t *testing.T) {
+	parent, cancelParent := context.WithCancel(context.Background())
+	ctx, stop := pieceDownloadContext(parent)
+
+	cancelParent()
+	select {
+	case <-ctx.Done():
+		t.Fatal("piece download context canceled with parent")
+	default:
+	}
+
+	stop()
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("piece download context was not canceled")
+	}
+}
+
+func TestMeteredStreamCloseStopsPieceDownload(t *testing.T) {
+	parent, cancelParent := context.WithCancel(context.Background())
+	defer cancelParent()
+
+	ctx, stop := pieceDownloadContext(parent)
+	stream := &meteredStream{
+		ReadCloser: io.NopCloser(strings.NewReader("payload")),
+		onClose:    stop,
+	}
+
+	cancelParent()
+	select {
+	case <-ctx.Done():
+		t.Fatal("piece download context canceled with parent")
+	default:
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("close did not stop piece download")
 	}
 }
