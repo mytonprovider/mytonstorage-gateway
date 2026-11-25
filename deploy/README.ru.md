@@ -11,7 +11,7 @@
 
 | Шаг | Где | Команда |
 |-----|-----|---------|
-| 1 | Dev-машина | `GATEWAY_IMAGE=... TONUTILS_STORAGE_IMAGE=... task image:build:push` |
+| 1 | Dev-машина | `GATEWAY_IMAGE=... task image:build:push` |
 | 2 | VPS | Клон репо |
 | 3 | VPS | `task hub:init` → правка `deploy/.env.hub` |
 | 4 | VPS | `task hub:up` |
@@ -22,7 +22,6 @@ Hub compose ([docker-compose.hub.yml](docker-compose.hub.yml)) — `pull_policy:
 
 ```bash
 GATEWAY_IMAGE=rudolfkova/mytonstorage-gateway:latest \
-TONUTILS_STORAGE_IMAGE=rudolfkova/mytonutils-storage:v1.5.1 \
 task image:build:push
 ```
 
@@ -38,7 +37,8 @@ task hub:health
 ```
 
 Обязательно в `.env.hub`:
-- `GATEWAY_IMAGE`, `TONUTILS_STORAGE_IMAGE`
+- `GATEWAY_IMAGE`
+- `TONUTILS_STORAGE_IMAGE` — `ghcr.io/mytonprovider/tonutils-storage:v1.5.1` (в этом репо не собирается)
 - `DB_PASSWORD` — сильный пароль Postgres
 - `SYSTEM_ACCESS_TOKENS` — Bearer-токены для metrics/reports/bans (формат см. `cmd/config.go`)
 - `TON_STORAGE_LOGIN`, `TON_STORAGE_PASSWORD` — credentials tonutils-storage API

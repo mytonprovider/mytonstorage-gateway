@@ -39,12 +39,13 @@ API: `http://localhost:9093` (порт задаётся `GATEWAY_PORT` в `deplo
 ```bash
 # dev-машина
 GATEWAY_IMAGE=rudolfkova/mytonstorage-gateway:latest \
-TONUTILS_STORAGE_IMAGE=rudolfkova/mytonutils-storage:v1.5.1 \
 task image:build:push
 
 # VPS
 task hub:init && nano deploy/.env.hub && task hub:up && task hub:health
 ```
+
+Образ tonutils-storage здесь не собирается: `TONUTILS_STORAGE_IMAGE=ghcr.io/mytonprovider/tonutils-storage:v1.5.1`.
 
 Подробнее: [deploy/README.ru.md](deploy/README.ru.md).
 

@@ -131,26 +131,6 @@ tasks:
           --build-arg BUILD_TAGS="${BUILD_TAGS:-}" \
           -t "${GATEWAY_IMAGE}" .
 
-  image:build:tonutils-storage:
-    desc: Build tonutils-storage image locally (set TONUTILS_STORAGE_IMAGE)
-    cmds:
-      - |
-        if [ -z "${TONUTILS_STORAGE_IMAGE:-}" ]; then
-          echo "TONUTILS_STORAGE_IMAGE is required, e.g. TONUTILS_STORAGE_IMAGE=user/mytonutils-storage:v1.5.1 task image:build:tonutils-storage"
-          exit 1
-        fi
-      - |
-        docker build -f deploy/tonutils-storage.Dockerfile \
-          --build-arg TONUTILS_STORAGE_VERSION="${TONUTILS_STORAGE_VERSION:-v1.5.1}" \
-          -t "${TONUTILS_STORAGE_IMAGE}" \
-          deploy
-
-  image:build:
-    desc: Build gateway and tonutils-storage images (set GATEWAY_IMAGE and TONUTILS_STORAGE_IMAGE)
-    deps:
-      - image:build:gateway
-      - image:build:tonutils-storage
-
   image:push:gateway:
     desc: Push prebuilt gateway image (set GATEWAY_IMAGE)
     cmds:
@@ -161,27 +141,11 @@ tasks:
         fi
       - docker push "${GATEWAY_IMAGE}"
 
-  image:push:tonutils-storage:
-    desc: Push prebuilt tonutils-storage image (set TONUTILS_STORAGE_IMAGE)
-    cmds:
-      - |
-        if [ -z "${TONUTILS_STORAGE_IMAGE:-}" ]; then
-          echo "TONUTILS_STORAGE_IMAGE is required"
-          exit 1
-        fi
-      - docker push "${TONUTILS_STORAGE_IMAGE}"
-
-  image:push:
-    desc: Push gateway and tonutils-storage images
-    deps:
-      - image:push:gateway
-      - image:push:tonutils-storage
-
   image:build:push:
-    desc: Build and push gateway + tonutils-storage images
+    desc: Build and push gateway image (set GATEWAY_IMAGE)
     cmds:
-      - task: image:build
-      - task: image:push
+      - task: image:build:gateway
+      - task: image:push:gateway
 
   mod:tidy:
     desc: go mod tidy

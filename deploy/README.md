@@ -11,7 +11,7 @@ Stack (hub compose):
 
 | Step | Where | Command |
 |------|-------|---------|
-| 1 | Dev machine | `GATEWAY_IMAGE=... TONUTILS_STORAGE_IMAGE=... task image:build:push` |
+| 1 | Dev machine | `GATEWAY_IMAGE=... task image:build:push` |
 | 2 | VPS | Clone repo |
 | 3 | VPS | `task hub:init` → edit `deploy/.env.hub` |
 | 4 | VPS | `task hub:up` |
@@ -22,7 +22,6 @@ Hub compose ([docker-compose.hub.yml](docker-compose.hub.yml)) uses `pull_policy
 
 ```bash
 GATEWAY_IMAGE=rudolfkova/mytonstorage-gateway:latest \
-TONUTILS_STORAGE_IMAGE=rudolfkova/mytonutils-storage:v1.5.1 \
 task image:build:push
 ```
 
@@ -38,7 +37,8 @@ task hub:health
 ```
 
 Required in `.env.hub`:
-- `GATEWAY_IMAGE`, `TONUTILS_STORAGE_IMAGE`
+- `GATEWAY_IMAGE`
+- `TONUTILS_STORAGE_IMAGE` — `ghcr.io/mytonprovider/tonutils-storage:v1.5.1` (not built in this repo)
 - `DB_PASSWORD` — strong Postgres password
 - `SYSTEM_ACCESS_TOKENS` — Bearer tokens for metrics/reports/bans (see `cmd/config.go`)
 - `TON_STORAGE_LOGIN`, `TON_STORAGE_PASSWORD` — tonutils-storage API credentials

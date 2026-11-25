@@ -39,12 +39,13 @@ Config: copy `deploy/.env.example` → `deploy/.env` or run `task deploy:init`.
 ```bash
 # dev machine
 GATEWAY_IMAGE=rudolfkova/mytonstorage-gateway:latest \
-TONUTILS_STORAGE_IMAGE=rudolfkova/mytonutils-storage:v1.5.1 \
 task image:build:push
 
 # VPS
 task hub:init && nano deploy/.env.hub && task hub:up && task hub:health
 ```
+
+The tonutils-storage image is not built here: `TONUTILS_STORAGE_IMAGE=ghcr.io/mytonprovider/tonutils-storage:v1.5.1`.
 
 See [deploy/README.md](deploy/README.md) for details.
 
