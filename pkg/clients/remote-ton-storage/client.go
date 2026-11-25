@@ -22,6 +22,7 @@ import (
 	tonstorage "github.com/xssnick/tonutils-storage/storage"
 
 	tonapi "mytonstorage-gateway/pkg/clients/ton-storage"
+	"mytonstorage-gateway/pkg/constants"
 )
 
 var ErrNotFound = errors.New("not found")
@@ -46,6 +47,18 @@ type FileStream struct {
 	PeersCount int
 }
 
+type torrentFlight struct {
+	done       chan struct{}
+	torrent    *tonstorage.Torrent
+	downloader tonstorage.TorrentDownloader
+	err        error
+}
+
+type torrentFail struct {
+	until time.Time
+	err   error
+}
+
 type client struct {
 	netMgr     adnl.NetManager
 	dhtGateway *adnl.Gateway
@@ -53,8 +66,13 @@ type client struct {
 
 	bagsCache *BagsCache
 
-	downloadingBagLocks   map[string]*sync.Mutex
-	downloadingBagLocksMu sync.Mutex
+	loadTorrent       func(ctx context.Context, bagID string) (*tonstorage.Torrent, tonstorage.TorrentDownloader, error)
+	downloaderTimeout time.Duration
+	torrentFailTTL    time.Duration
+	flightMu          sync.Mutex
+	flights           map[string]*torrentFlight
+	failMu            sync.Mutex
+	failUntil         map[string]torrentFail
 
 	metrics *RemoteTONStorageMetrics
 
@@ -96,7 +114,11 @@ func (c *client) StreamFile(ctx context.Context, bagID, path string) (FileStream
 		pieces = append(pieces, p)
 	}
 
-	fetch := tonstorage.NewPreFetcher(ctx, torrent, downloader, func(event tonstorage.Event) {}, 64, pieces)
+	// The caller cancels ctx when the handler returns, before fasthttp reads the body.
+	// Piece download must outlive that cancel and stop when the reader is closed.
+	dlCtx, stopDownload := pieceDownloadContext(ctx)
+
+	fetch := tonstorage.NewPreFetcher(dlCtx, torrent, downloader, func(event tonstorage.Event) {}, 64, pieces)
 	pr, pw := io.Pipe()
 
 	// metrics wrapping reader
@@ -111,21 +133,22 @@ func (c *client) StreamFile(ctx context.Context, bagID, path string) (FileStream
 		metrics:       c.metrics,
 		firstByteOnce: &firstByteOnce,
 		ttfbObserved:  false,
+		onClose:       stopDownload,
 	}
 
-	go func(ctx context.Context) {
+	go func() {
 		defer fetch.Stop()
 		defer pw.Close()
 
 		for p := fileInfo.FromPiece; p <= fileInfo.ToPiece; p++ {
 			select {
-			case <-ctx.Done():
-				_ = pw.CloseWithError(ctx.Err())
+			case <-dlCtx.Done():
+				_ = pw.CloseWithError(dlCtx.Err())
 				return
 			default:
 			}
 
-			data, _, err := fetch.Get(ctx, p)
+			data, _, err := fetch.Get(dlCtx, p)
 			if err != nil {
 				_ = pw.CloseWithError(fmt.Errorf("failed to download piece %d: %w", p, err))
 				return
@@ -145,7 +168,7 @@ func (c *client) StreamFile(ctx context.Context, bagID, path string) (FileStream
 				return
 			}
 		}
-	}(ctx)
+	}()
 
 	if c.metrics != nil {
 		c.metrics.streamFileReqs.WithLabelValues("success").Inc()
@@ -157,6 +180,12 @@ func (c *client) StreamFile(ctx context.Context, bagID, path string) (FileStream
 		Size:       fileInfo.Size,
 		PeersCount: len(peers),
 	}, nil
+}
+
+// pieceDownloadContext detaches piece fetching from the caller's cancel and
+// bounds it by the same deadline the HTTP handler uses for the response body.
+func pieceDownloadContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(parent), time.Duration(constants.FileDownloadTimeoutSeconds)*time.Second)
 }
 
 // ListFiles returns all files in the bag with sizes by loading the torrent header via ADNL.
@@ -232,24 +261,93 @@ func (c *client) Close() {
 }
 
 func (c *client) getTorrent(ctx context.Context, bagID string) (torrent *tonstorage.Torrent, downloader tonstorage.TorrentDownloader, err error) {
-	// First cache check
 	if t, d, ok := c.bagsCache.Get(bagID); ok {
-		torrent = t
-		downloader = d
-		return
+		return t, d, nil
 	}
 
-	lock := c.getBagLock(bagID)
-	lock.Lock()
-	defer lock.Unlock()
-
-	// Second cache check under the lock
-	if t, d, ok := c.bagsCache.Get(bagID); ok {
-		torrent = t
-		downloader = d
-		return
+	if failErr, ok := c.torrentRecentlyFailed(bagID); ok {
+		return nil, nil, failErr
 	}
 
+	flight, leader := c.getOrStartTorrentFlight(bagID)
+	if leader {
+		go c.runTorrentFlight(flight, bagID)
+	}
+
+	select {
+	case <-ctx.Done():
+		return nil, nil, ctx.Err()
+	case <-flight.done:
+		return flight.torrent, flight.downloader, flight.err
+	}
+}
+
+func (c *client) runTorrentFlight(flight *torrentFlight, bagID string) {
+	loadCtx, cancel := context.WithTimeout(context.Background(), c.downloaderTimeout)
+	defer cancel()
+
+	load := c.loadTorrent
+	if load == nil {
+		load = c.doLoadTorrent
+	}
+
+	t, d, err := load(loadCtx, bagID)
+	flight.torrent = t
+	flight.downloader = d
+	flight.err = err
+	if err != nil {
+		c.rememberTorrentFail(bagID, err)
+	}
+	close(flight.done)
+	c.dropTorrentFlight(bagID, flight)
+}
+
+func (c *client) getOrStartTorrentFlight(bagID string) (*torrentFlight, bool) {
+	c.flightMu.Lock()
+	defer c.flightMu.Unlock()
+
+	if f, ok := c.flights[bagID]; ok {
+		return f, false
+	}
+
+	f := &torrentFlight{done: make(chan struct{})}
+	c.flights[bagID] = f
+	return f, true
+}
+
+func (c *client) dropTorrentFlight(bagID string, flight *torrentFlight) {
+	c.flightMu.Lock()
+	defer c.flightMu.Unlock()
+	if c.flights[bagID] == flight {
+		delete(c.flights, bagID)
+	}
+}
+
+func (c *client) torrentRecentlyFailed(bagID string) (error, bool) {
+	c.failMu.Lock()
+	defer c.failMu.Unlock()
+
+	entry, ok := c.failUntil[bagID]
+	if !ok {
+		return nil, false
+	}
+	if time.Now().Before(entry.until) {
+		return entry.err, true
+	}
+	delete(c.failUntil, bagID)
+	return nil, false
+}
+
+func (c *client) rememberTorrentFail(bagID string, err error) {
+	c.failMu.Lock()
+	defer c.failMu.Unlock()
+	c.failUntil[bagID] = torrentFail{
+		until: time.Now().Add(c.torrentFailTTL),
+		err:   err,
+	}
+}
+
+func (c *client) doLoadTorrent(ctx context.Context, bagID string) (torrent *tonstorage.Torrent, downloader tonstorage.TorrentDownloader, err error) {
 	id, err := hex.DecodeString(bagID)
 	if err != nil {
 		err = fmt.Errorf("invalid bag id hex: %w", err)
@@ -266,7 +364,7 @@ func (c *client) getTorrent(ctx context.Context, bagID string) (torrent *tonstor
 		return
 	}
 
-	timeoutCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	timeoutCtx, cancel := context.WithTimeout(ctx, c.downloaderTimeout)
 	defer cancel()
 
 	dStart := time.Now()
@@ -302,17 +400,6 @@ func (c *client) getTorrent(ctx context.Context, bagID string) (torrent *tonstor
 	c.bagsCache.Set(bagID, torrent, downloader)
 
 	return
-}
-
-func (c *client) getBagLock(bagID string) *sync.Mutex {
-	c.downloadingBagLocksMu.Lock()
-	defer c.downloadingBagLocksMu.Unlock()
-	if m, ok := c.downloadingBagLocks[bagID]; ok {
-		return m
-	}
-	m := &sync.Mutex{}
-	c.downloadingBagLocks[bagID] = m
-	return m
 }
 
 func NewClient(ctx context.Context, configURL string, cache *BagsCache, metrics *RemoteTONStorageMetrics) (Client, error) {
@@ -375,16 +462,19 @@ func NewClient(ctx context.Context, configURL string, cache *BagsCache, metrics 
 	}
 
 	return &client{
-		bagsCache:           cache,
-		netMgr:              netMgr,
-		dhtGateway:          dhtGateway,
-		dhtClient:           dhtClient,
-		storageKey:          storageKey,
-		storageGate:         storageGate,
-		srv:                 srv,
-		conn:                conn,
-		store:               store,
-		metrics:             metrics,
-		downloadingBagLocks: make(map[string]*sync.Mutex),
+		bagsCache:         cache,
+		netMgr:            netMgr,
+		dhtGateway:        dhtGateway,
+		dhtClient:         dhtClient,
+		storageKey:        storageKey,
+		storageGate:       storageGate,
+		srv:               srv,
+		conn:              conn,
+		store:             store,
+		metrics:           metrics,
+		downloaderTimeout: constants.RemoteDownloaderTimeout,
+		torrentFailTTL:    constants.RemoteTorrentFailCacheTTL,
+		flights:           make(map[string]*torrentFlight),
+		failUntil:         make(map[string]torrentFail),
 	}, nil
 }

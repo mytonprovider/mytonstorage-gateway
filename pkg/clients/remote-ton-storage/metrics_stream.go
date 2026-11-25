@@ -14,6 +14,7 @@ type meteredStream struct {
 	firstByteOnce *sync.Once
 	ttfbObserved  bool
 	closed        sync.Once
+	onClose       func()
 }
 
 func (m *meteredStream) Read(p []byte) (int, error) {
@@ -31,6 +32,9 @@ func (m *meteredStream) Read(p []byte) (int, error) {
 func (m *meteredStream) Close() error {
 	var errRet error
 	m.closed.Do(func() {
+		if m.onClose != nil {
+			m.onClose()
+		}
 		errRet = m.ReadCloser.Close()
 		if m.metrics != nil {
 			m.metrics.streamFileDuration.WithLabelValues("success").Observe(time.Since(m.start).Seconds())
