@@ -23,6 +23,7 @@ services:
     image: ${TONUTILS_STORAGE_IMAGE}
     pull_policy: always
     restart: unless-stopped
+    entrypoint: ["/bin/sh", "/usr/local/bin/tonutils-storage-entrypoint.sh"]
     environment:
       TONUTILS_STORAGE_EXTERNAL_IP: "${TONUTILS_STORAGE_EXTERNAL_IP:-}"
       TONUTILS_STORAGE_UDP_PORT: "${TONUTILS_STORAGE_UDP_PORT:-47432}"
@@ -42,6 +43,7 @@ services:
     volumes:
       - tonstorage_db:/data/db
       - bags_data:/bags
+      - ./tonutils-storage-entrypoint.sh:/usr/local/bin/tonutils-storage-entrypoint.sh:ro
 
   gateway:
     image: ${GATEWAY_IMAGE}
