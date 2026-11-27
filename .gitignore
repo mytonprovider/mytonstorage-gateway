@@ -6,7 +6,8 @@
 /.vscode/*
 /.DS_Store
 /deploy/.env
-/deploy/.env.hub
+.env.hub*
+!.env.hub.example
 /bin/
 /.env.*
 *.env
