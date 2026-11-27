@@ -7,22 +7,24 @@
 - `tonutils-storage` (образ из registry)
 - `postgres` (официальный образ)
 
-## Docker Hub (рекомендуется для VPS)
+## GHCR (рекомендуется для VPS)
+
+Образ публикует задание `publish` в `CI` после проверок при каждом push в `master` (`ghcr.io/mytonprovider/mytonstorage-gateway:<tag>`, тег — первые 7 символов коммита).
 
 | Шаг | Где | Команда |
 |-----|-----|---------|
-| 1 | Dev-машина | `GATEWAY_IMAGE=... task image:build:push` |
+| 1 | GitHub | Слияние в `master` → задание `publish` в `CI` публикует образ |
 | 2 | VPS | Клон репо |
 | 3 | VPS | `task hub:init` → правка `deploy/.env.hub` |
 | 4 | VPS | `task hub:up` |
 
 Hub compose ([docker-compose.hub.yml](docker-compose.hub.yml)) — `pull_policy: always`, без локальной сборки.
 
-### Dev-машина: build + push
+### Ручная сборка и push (dev-машина, запасной путь)
 
 ```bash
-GATEWAY_IMAGE=rudolfkova/mytonstorage-gateway:latest \
-task image:build:push
+docker login ghcr.io
+GATEWAY_IMAGE=ghcr.io/mytonprovider/mytonstorage-gateway:<tag> task image:build:push
 ```
 
 Release gateway (без debug CORS): не задавай `BUILD_TAGS` или `BUILD_TAGS=`.

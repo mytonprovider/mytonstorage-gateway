@@ -34,14 +34,11 @@ API: `http://localhost:9093` (port set via `GATEWAY_PORT` in `deploy/.env`).
 Config: copy `deploy/.env.example` → `deploy/.env` or run `task deploy:init`.  
 `DB_USER` must be **pguser** — required by `db/init.sql`.
 
-## Deploy on VPS (Docker Hub)
+## Deploy on VPS
+
+The image is published by the `publish` job in `CI` after checks on every push to `master`: `ghcr.io/mytonprovider/mytonstorage-gateway:<tag>`, the tag is the first 7 characters of the commit. Manual `task image:build:push` stays as a fallback.
 
 ```bash
-# dev machine
-GATEWAY_IMAGE=rudolfkova/mytonstorage-gateway:latest \
-task image:build:push
-
-# VPS
 task hub:init && nano deploy/.env.hub && task hub:up && task hub:health
 ```
 

@@ -34,14 +34,11 @@ API: `http://localhost:9093` (порт задаётся `GATEWAY_PORT` в `deplo
 Конфиг: `deploy/.env.example` → `deploy/.env` или `task deploy:init`.  
 `DB_USER` должен быть **pguser** — так задано в `db/init.sql`.
 
-## Деплой на VPS (Docker Hub)
+## Деплой на VPS
+
+Образ публикует задание `publish` в `CI` после проверок при каждом push в `master`: `ghcr.io/mytonprovider/mytonstorage-gateway:<tag>`, тег — первые 7 символов коммита. Ручной `task image:build:push` остаётся запасным путём.
 
 ```bash
-# dev-машина
-GATEWAY_IMAGE=rudolfkova/mytonstorage-gateway:latest \
-task image:build:push
-
-# VPS
 task hub:init && nano deploy/.env.hub && task hub:up && task hub:health
 ```
 
