@@ -127,7 +127,7 @@ tasks:
           exit 1
         fi
       - |
-        docker build -f Dockerfile \
+        docker build --platform linux/amd64 -f Dockerfile \
           --build-arg BUILD_TAGS="${BUILD_TAGS:-}" \
           -t "${GATEWAY_IMAGE}" .
 
